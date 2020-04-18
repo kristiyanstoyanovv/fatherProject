@@ -6,6 +6,8 @@
 
 #define thermometerPin D5
 #define heaterPin D6
+#define motorPin D7
+
 #define resetTimer1s()   timer0_write(ESP.getCycleCount() + 80000000)
 
 const char* ssid = "TDI!";
@@ -34,15 +36,22 @@ void temperatureRegulator();
 void measureTemperature();
 void parserCommand(String command);
 
-int nTimer = 0;
 float liveTemp = 0;
+int nTimer = 0;
+int nTimer2 = 0;
 int delayH;
 int requiredTemperature;
+int motorW;
+int motorB;
+int timerMinC = 0;
 byte addrT = 0;
 byte addrD = 5;
+byte addrMW = 10;
+byte addrMB = 15;
 bool debug = true;
 bool flHeater = false;
 bool flCheck = true;
+bool flMotor = false;
 
 
 WiFiUDP Udp;
@@ -56,6 +65,7 @@ void setup() {
   initEEPROM();
   initTimer();
   pinMode(heaterPin, OUTPUT);
+  pinMode(motorPin, OUTPUT);
   Serial.println("---------------- LOOP ----------------");
 }
 
@@ -112,15 +122,38 @@ void initEEPROM() {
     EEPROM.write(addrD,delayH);
     EEPROM.commit();
   }
+  if (motorW >= 20 || motorW <= 0){
+    motorW = 3;
+    EEPROM.write(addrMW,motorW);
+    EEPROM.commit();
+  }
+  if (motorB >= 60 || motorB <= 0){
+    motorB = 15;
+    EEPROM.write(addrMB,motorB);
+    EEPROM.commit();
+  }
   if (debug == true) Serial.printf("Required Temp: %d\n",requiredTemperature);
   if (debug == true) Serial.printf("Delay between temperature: %d\n", delayH);
+  if (debug == true) Serial.printf("Motor working time: %d\n", motorW);
+  if (debug == true) Serial.printf("Motor break time: %d\n", motorB);
 }
 
 void loop() {
+  if (flMotor == false && timerMinC == 0) {
+    digitalWrite(motorPin, HIGH);
+    flMotor = true;
+  } else if (flMotor == true && timerMinC == motorW) {
+    digitalWrite(motorPin, LOW);
+    digitalWrite(heaterPin, LOW);
+    flMotor = false;
+    flHeater = false;
+  }
   if (flCheck == true) {
     measureTemperature();
-    temperatureRegulator();
     flCheck = false;
+    if (flMotor == true) {
+      temperatureRegulator();
+    }
   }
   checkForPacket();
 }
@@ -151,9 +184,17 @@ void checkForPacket() {
 
 void timerCallback() {
   nTimer++;
-  if (nTimer >= 5) {
-    flCheck = true;
+  nTimer2++;
+  if (nTimer >= 60) {
     nTimer = 0;
+    timerMinC++;
+  }
+  if (timerMinC == motorB) {
+    timerMinC == 0;
+  }
+  if (nTimer2 >= 5) {
+    flCheck = true;
+    nTimer2 = 0;
   }
   resetTimer1s();
 }
@@ -166,7 +207,7 @@ void measureTemperature() {
 }
 
 void temperatureRegulator() {
-  if (liveTemp <= requiredTemperature-delayH && flHeater == false) {
+  if (liveTemp <= requiredTemperature-delayH && flHeater == false && flMotor == true) {
     if (debug == true) Serial.println("Heater is ON!");
     digitalWrite(heaterPin, HIGH);
     flHeater = true;
@@ -180,54 +221,107 @@ void temperatureRegulator() {
 void parserCommand(String command) {
   Serial.println(command);
   if (command.charAt(0) == '#') {
-    if (command.charAt(1) == 'T') {
-      switch(command.charAt(2)) {
-        case 'N': {
-          char temp[10];
-          sprintf(temp,"!TN:%f", liveTemp);
-          Udp.beginPacket(senderIP, senderPort);
-          Udp.write(temp);
-          Udp.endPacket();
-          if (debug == true) Serial.printf("Temperature at that moment is: %d\n", requiredTemperature);
-        } break;
-        
-        case 'R': {
-          char temp[10];
-          sprintf(temp,"!T:%d", requiredTemperature);
-          Udp.beginPacket(senderIP, senderPort);
-          Udp.write(temp);
-          Udp.endPacket();
-          if (debug == true) Serial.printf("Required temperature is: %d\n", requiredTemperature);
-        } break;
-        
-        case 'S': {
-          command.remove(0,4);
-          requiredTemperature = command.toInt();
-          EEPROM.write(addrT,requiredTemperature);
-          EEPROM.commit();
-          if (debug == true) Serial.printf("Temperature is set to: %d\n", requiredTemperature);
-        } break;
-      }
+    switch (command.charAt(1)) {
       
-    } else if (command.charAt(1) == 'D') {
-        switch(command.charAt(2)) {
-        case 'R': {
+      case 'R': {
+        
+        if (command.charAt(2) == 'D') { //RD
           char temp[10];
           sprintf(temp,"!D:%d", delayH);
           Udp.beginPacket(senderIP, senderPort);
           Udp.write(temp);
           Udp.endPacket();
           if (debug == true) Serial.printf("Delay is: %d\n", delayH);
-        } break;
+          break;
+        }
         
-        case 'S': {
-          command.remove(0,4);
-          delayH = command.toInt();
-          EEPROM.write(addrD,delayH);
-          EEPROM.commit();
-          if (debug == true) Serial.printf("Delay is set to: %d\n", delayH);
-        } break;
-      }
+        switch (command.charAt(2)) {
+          case 'T': {
+            if (command.charAt(3) == 'R') { //RTR
+              char temp[10];
+              sprintf(temp,"!TR:%d", requiredTemperature);
+              Udp.beginPacket(senderIP, senderPort);
+              Udp.write(temp);
+              Udp.endPacket();
+              if (debug == true) Serial.printf("Required temperature is: %d\n", requiredTemperature); 
+              
+            } else if (command.charAt(3) == 'N') { //RTN
+              char temp[10];
+              sprintf(temp,"!TN:%f", liveTemp);
+              Udp.beginPacket(senderIP, senderPort);
+              Udp.write(temp);
+              Udp.endPacket();
+              if (debug == true) Serial.printf("Temperature at that moment is: %f\n", liveTemp);
+            }
+          } break;
+          
+          case 'M': {
+            
+            if (command.charAt(3) == 'W') { //RMW
+              char temp[10];
+              sprintf(temp,"!MW:%d", motorW);
+              Udp.beginPacket(senderIP, senderPort);
+              Udp.write(temp);
+              Udp.endPacket();
+              if (debug == true) Serial.printf("Motor working time: %d\n", motorW);
+              
+            } else if (command.charAt(3) == 'B') { //RMB
+              char temp[10];
+              sprintf(temp,"!MB:%d", motorB);
+              Udp.beginPacket(senderIP, senderPort);
+              Udp.write(temp);
+              Udp.endPacket();
+              if (debug == true) Serial.printf("Motor break time: %d\n", motorB);
+            }
+            
+          } break;
+          
+        }
+      } break;
+      
+      case 'W': {
+        
+        switch (command.charAt(2)) {
+          
+          case 'M': {
+            
+            if (command.charAt(3) == 'W') {
+              command.remove(0,5);
+              motorW = command.toInt();
+              EEPROM.write(addrMW,motorW);
+              EEPROM.commit();
+            if (debug == true) Serial.printf("Motor working time is set to: %d\n", motorW);
+              
+            } else if (command.charAt(3) == 'B') {
+              command.remove(0,5);
+              motorB = command.toInt();
+              EEPROM.write(addrMB,motorB);
+              EEPROM.commit();
+              if (debug == true) Serial.printf("Motor break time is set to: %d\n", motorB);
+            }
+            
+          } break;
+          
+          case 'T': {
+            command.remove(0,4);
+            requiredTemperature = command.toInt();
+            EEPROM.write(addrT,requiredTemperature);
+            EEPROM.commit();
+            if (debug == true) Serial.printf("Temperature is set to: %d\n", requiredTemperature);
+          } break;
+          
+          case 'D': {
+            command.remove(0,4);
+            delayH = command.toInt();
+            EEPROM.write(addrD,delayH);
+            EEPROM.commit();
+            if (debug == true) Serial.printf("Delay is set to: %d\n", delayH);
+          } break;
+          
+        }
+        
+      } break;
+      
     }
   }
 }
