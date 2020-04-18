@@ -39,8 +39,8 @@ void parserCommand(String command);
 float liveTemp = 0;
 int nTimer = 0;
 int nTimer2 = 0;
-int delayH;
-int requiredTemperature;
+int startTemperature;
+int stopTemperature;
 int motorW;
 int motorB;
 int timerMinC = 0;
@@ -48,7 +48,7 @@ byte addrT = 0;
 byte addrD = 5;
 byte addrMW = 10;
 byte addrMB = 15;
-bool debug = true;
+bool debug = false;
 bool flHeater = false;
 bool flCheck = true;
 bool flMotor = false;
@@ -109,17 +109,18 @@ void initTimer() {
 }
 
 void initEEPROM() {
-  requiredTemperature = EEPROM.read(addrT);
-  delayH = EEPROM.read(addrD);
-  
-  if (requiredTemperature >= 70) {
-    requiredTemperature = 50;
-    EEPROM.write(addrT,requiredTemperature);
+  stopTemperature = EEPROM.read(addrT);
+  startTemperature = EEPROM.read(addrD);
+  motorW = EEPROM.read(addrMW);
+  motorB = EEPROM.read(addrMB);
+  if (stopTemperature >= 70) {
+    stopTemperature = 55;
+    EEPROM.write(addrT,stopTemperature);
     EEPROM.commit();
   }
-  if (delayH >= 20 || delayH <= 0){
-    delayH = 2;
-    EEPROM.write(addrD,delayH);
+  if (startTemperature >= 70){
+    startTemperature = 53;
+    EEPROM.write(addrD,startTemperature);
     EEPROM.commit();
   }
   if (motorW >= 20 || motorW <= 0){
@@ -127,13 +128,13 @@ void initEEPROM() {
     EEPROM.write(addrMW,motorW);
     EEPROM.commit();
   }
-  if (motorB >= 60 || motorB <= 0){
+  if (motorB >= 120 || motorB <= 0){
     motorB = 15;
     EEPROM.write(addrMB,motorB);
     EEPROM.commit();
   }
-  if (debug == true) Serial.printf("Required Temp: %d\n",requiredTemperature);
-  if (debug == true) Serial.printf("Delay between temperature: %d\n", delayH);
+  if (debug == true) Serial.printf("Stop temperature: %d\n",stopTemperature);
+  if (debug == true) Serial.printf("Start temperature: %d\n", startTemperature);
   if (debug == true) Serial.printf("Motor working time: %d\n", motorW);
   if (debug == true) Serial.printf("Motor break time: %d\n", motorB);
 }
@@ -141,12 +142,16 @@ void initEEPROM() {
 void loop() {
   if (flMotor == false && timerMinC == 0) {
     digitalWrite(motorPin, HIGH);
+    digitalWrite(heaterPin, HIGH);
     flMotor = true;
+    flHeater = true;
+    if (debug == true) Serial.println("Motor is turned ON!\nHeater is turned ON!");
   } else if (flMotor == true && timerMinC == motorW) {
     digitalWrite(motorPin, LOW);
     digitalWrite(heaterPin, LOW);
     flMotor = false;
     flHeater = false;
+    if (debug == true) Serial.println("Motor is turned OFF!\nHeater is turned OFF!");
   }
   if (flCheck == true) {
     measureTemperature();
@@ -176,10 +181,13 @@ void checkForPacket() {
           Serial.print('\t');
           Serial.print("Remote Port: ");
           Serial.println(senderPort);
-      } 
+      }
       parserCommand(command);
+      for (int i = 0; i < sizeof(packetBuffer); i++) {
+        packetBuffer[i] = '\0';
+      }
+      szOfPacket = 0;
    }
-  szOfPacket = 0;
 }
 
 void timerCallback() {
@@ -188,9 +196,11 @@ void timerCallback() {
   if (nTimer >= 60) {
     nTimer = 0;
     timerMinC++;
+    Serial.printf("Timer min: %d\n", timerMinC);
   }
-  if (timerMinC == motorB) {
-    timerMinC == 0;
+  if (timerMinC == motorW + motorB) {
+    Serial.println("Timer min reseted!");
+    timerMinC = 0;
   }
   if (nTimer2 >= 5) {
     flCheck = true;
@@ -207,11 +217,11 @@ void measureTemperature() {
 }
 
 void temperatureRegulator() {
-  if (liveTemp <= requiredTemperature-delayH && flHeater == false && flMotor == true) {
+  if (liveTemp <= startTemperature && flHeater == false && flMotor == true) {
     if (debug == true) Serial.println("Heater is ON!");
     digitalWrite(heaterPin, HIGH);
     flHeater = true;
-  } else if (liveTemp >= requiredTemperature && flHeater == true) {
+  } else if (liveTemp >= stopTemperature && flHeater == true) {
     if (debug == true) Serial.println("Heater is OFF!");
     digitalWrite(heaterPin, LOW);
     flHeater = false;
@@ -225,13 +235,13 @@ void parserCommand(String command) {
       
       case 'R': {
         
-        if (command.charAt(2) == 'D') { //RD
+        if (command.charAt(2) == 'S') { //RS
           char temp[10];
-          sprintf(temp,"!D:%d", delayH);
+          sprintf(temp,"!D:%d", startTemperature);
           Udp.beginPacket(senderIP, senderPort);
           Udp.write(temp);
           Udp.endPacket();
-          if (debug == true) Serial.printf("Delay is: %d\n", delayH);
+          if (debug == true) Serial.printf("Start temperature is: %d\n", startTemperature);
           break;
         }
         
@@ -239,15 +249,15 @@ void parserCommand(String command) {
           case 'T': {
             if (command.charAt(3) == 'R') { //RTR
               char temp[10];
-              sprintf(temp,"!TR:%d", requiredTemperature);
+              sprintf(temp,"!TR:%d", stopTemperature);
               Udp.beginPacket(senderIP, senderPort);
               Udp.write(temp);
               Udp.endPacket();
-              if (debug == true) Serial.printf("Required temperature is: %d\n", requiredTemperature); 
+              if (debug == true) Serial.printf("Required temperature is: %d\n", stopTemperature); 
               
             } else if (command.charAt(3) == 'N') { //RTN
               char temp[10];
-              sprintf(temp,"!TN:%f", liveTemp);
+              sprintf(temp,"!TN:%.2f", liveTemp);
               Udp.beginPacket(senderIP, senderPort);
               Udp.write(temp);
               Udp.endPacket();
@@ -285,14 +295,14 @@ void parserCommand(String command) {
           
           case 'M': {
             
-            if (command.charAt(3) == 'W') {
+            if (command.charAt(3) == 'W') { //WMW
               command.remove(0,5);
               motorW = command.toInt();
               EEPROM.write(addrMW,motorW);
               EEPROM.commit();
             if (debug == true) Serial.printf("Motor working time is set to: %d\n", motorW);
               
-            } else if (command.charAt(3) == 'B') {
+            } else if (command.charAt(3) == 'B') { // WMB
               command.remove(0,5);
               motorB = command.toInt();
               EEPROM.write(addrMB,motorB);
@@ -302,20 +312,20 @@ void parserCommand(String command) {
             
           } break;
           
-          case 'T': {
+          case 'R': { //WR
             command.remove(0,4);
-            requiredTemperature = command.toInt();
-            EEPROM.write(addrT,requiredTemperature);
+            stopTemperature = command.toInt();
+            EEPROM.write(addrT,stopTemperature);
             EEPROM.commit();
-            if (debug == true) Serial.printf("Temperature is set to: %d\n", requiredTemperature);
+            if (debug == true) Serial.printf("Stop temperature is set to: %d\n", stopTemperature);
           } break;
           
-          case 'D': {
+          case 'S': { //WS
             command.remove(0,4);
-            delayH = command.toInt();
-            EEPROM.write(addrD,delayH);
+            startTemperature = command.toInt();
+            EEPROM.write(addrD,startTemperature);
             EEPROM.commit();
-            if (debug == true) Serial.printf("Delay is set to: %d\n", delayH);
+            if (debug == true) Serial.printf("Start temperature is set to: %d\n", startTemperature);
           } break;
           
         }
