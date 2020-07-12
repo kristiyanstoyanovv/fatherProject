@@ -4,9 +4,9 @@
 #include <OneWire.h>
 #include <DallasTemperature.h>
 
-#define thermometerPin D5
+#define thermometerPin D7
 #define heaterPin D6
-#define motorPin D7
+#define motorPin D8
 
 #define resetTimer1s()   timer0_write(ESP.getCycleCount() + 80000000)
 
@@ -142,10 +142,8 @@ void initEEPROM() {
 void loop() {
   if (flMotor == false && timerMinC == 0) {
     digitalWrite(motorPin, HIGH);
-    digitalWrite(heaterPin, HIGH);
     flMotor = true;
-    flHeater = true;
-    if (debug == true) Serial.println("Motor is turned ON!\nHeater is turned ON!");
+    if (debug == true) Serial.println("Motor is turned ON!");
   } else if (flMotor == true && timerMinC == motorW) {
     digitalWrite(motorPin, LOW);
     digitalWrite(heaterPin, LOW);
