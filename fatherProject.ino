@@ -24,7 +24,7 @@ IPAddress senderIP;
 OneWire oneWire(thermometerPin);
 DallasTemperature sensors(&oneWire);
 
-int internalPort = 111;
+int internalPort = 1111;
 int senderPort;
 
 void connectWifi();
